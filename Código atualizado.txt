@@ -1,0 +1,154 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include "RTClib.h"
+#include <LiquidCrystal_I2C.h>
+
+#define trig 12
+#define echo 13
+
+RTC_DS3231 rtc;
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+float alturaAnt = 0;
+bool ehDia = true;
+int fase = 0;
+bool tempForaIdeal = false;
+bool mostrarAlerta = false; // alterna entre alerta e fase
+
+// Símbolo personalizado de alerta (triângulo com !)
+byte alertaChar[8] = {
+  B00100,
+  B01110,
+  B10101,
+  B00100,
+  B00100,
+  B00000,
+  B00100,
+  B00000
+};
+
+void determinarFase(float altura);
+bool verificarTemperaturaLCD(float temp, bool ehDia, float diaMin, float diaMax, float noiteMin, float noiteMax);
+
+void setup() {
+  pinMode(trig, OUTPUT);
+  pinMode(echo, INPUT);
+  Serial.begin(9600);
+  Wire.begin();
+  lcd.init();
+  lcd.backlight();
+
+  // Criar caractere customizado
+  lcd.createChar(0, alertaChar);
+
+  if (!rtc.begin()) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("RTC NAO ENCONTRADO");
+    while (1);
+  }
+
+  // rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // Use uma vez se necessário
+}
+
+void loop() {
+  DateTime agora = rtc.now();
+  int hora = agora.hour();
+  int minuto = agora.minute();
+
+  ehDia = (hora >= 6 && hora < 18);
+
+  // Medir altura
+  digitalWrite(trig, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+
+  long duracao = pulseIn(echo, HIGH);
+  float altura = duracao * 0.034 / 2;
+  alturaAnt = altura;
+
+  determinarFase(altura);
+
+  // Temperatura
+  int leituraADC = analogRead(34);
+  float tensao = leituraADC * (5.0 / 4095.0);
+  float tempC = tensao * 100.0;
+
+  if (fase == 0) {
+    tempForaIdeal = verificarTemperaturaLCD(tempC, ehDia, 24.0, 28.0, 18.0, 22.0);
+  } else if (fase == 1) {
+    tempForaIdeal = verificarTemperaturaLCD(tempC, ehDia, 22.0, 26.0, 16.0, 20.0);
+  } else if (fase == 2) {
+    tempForaIdeal = verificarTemperaturaLCD(tempC, ehDia, 22.0, 26.0, 16.0, 20.0);
+  } else if (fase == 3) {
+    tempForaIdeal = verificarTemperaturaLCD(tempC, ehDia, 20.0, 26.0, 15.0, 18.0);
+  }
+
+  // Atualizar LCD
+  lcd.clear();
+
+  // Linha 0 - Hora
+  lcd.setCursor(0, 0);
+  lcd.print("Hora: ");
+  if (hora < 10) lcd.print("0");
+  lcd.print(hora);
+  lcd.print(":");
+  if (minuto < 10) lcd.print("0");
+  lcd.print(minuto);
+
+  // Linha 1 - Altura
+  lcd.setCursor(0, 1);
+  lcd.print("Altura: ");
+  lcd.print(altura, 1);
+  lcd.print(" cm");
+
+  // Linha 2 - Temperatura
+  lcd.setCursor(0, 2);
+  lcd.print("Temp: ");
+  lcd.print(tempC, 1);
+  lcd.print(" C");
+
+  // Linha 3 - Alternar entre fase ou alerta
+  lcd.setCursor(0, 3);
+  if (tempForaIdeal && mostrarAlerta) {
+    lcd.write(byte(0)); // caractere alerta
+    lcd.print(" TEMP FORA IDEAL!");
+  } else {
+    lcd.print("Fase: ");
+    switch (fase) {
+      case 0: lcd.print("BROTO"); break;
+      case 1: lcd.print("VEGETATIVO"); break;
+      case 2: lcd.print("BROTO LADRAO"); break;
+      case 3: lcd.print("ADULTA"); break;
+    }
+  }
+
+  // Alterna o modo de exibição
+  mostrarAlerta = !mostrarAlerta;
+
+  delay(5000);
+}
+
+void determinarFase(float altura) {
+  if (altura >= 2 && altura < 10) {
+    fase = 0;
+  } else if (altura >= 10 && altura < 25) {
+    fase = 1;
+  } else if (altura >= 25 && altura < 40) {
+    fase = 2;
+  } else if (altura >= 40) {
+    fase = 3;
+  } else {
+    fase = 0;
+  }
+}
+
+bool verificarTemperaturaLCD(float temp, bool ehDia, float diaMin, float diaMax, float noiteMin, float noiteMax) {
+  if (ehDia) {
+    return (temp < diaMin || temp > diaMax);
+  } else {
+    return (temp < noiteMin || temp > noiteMax);
+  }
+}
